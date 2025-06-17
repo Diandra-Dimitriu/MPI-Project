@@ -1,12 +1,19 @@
 import time
+import threading
 
+
+# this function measures and prints the execution time of another function
 def time_function(func, *args, **kwargs):
+    # start timer
     start_time = time.time()
     result = func(*args, **kwargs)
+    # end timer
     end_time = time.time()
     print(f"Execution time: {end_time - start_time:.6f} seconds")
     return result
 
+
+# reads clauses from user input, each clause is a set of integers
 def clauses():
     print("input clauses")
     clauses = []  # list of all clauses
@@ -14,87 +21,85 @@ def clauses():
         line = input()
         if line == "":
             break
-        g = []
+        g = set()
         for i in line.split(","):  # use digits separated with "," for each clause
-            g.append(int(i))
+            g.add(int(i))
         clauses.append(g)
     return clauses
 
-def resolution(g):
-    t = 1  # if 0 then unsatisfiable, if -1 unknown
-    d = 0  # current clause index
-    r = []  # to store the current clause we're resolving
-    previous_g = None  # To track changes in g
-    timeout_seconds = 10  # Maximum time allowed for resolution
-    start_time = time.time()  # Start a timer to enforce a timeout
+
+# resolve two clauses, return set of resolvents
+def resolve(ci, cj):
+    resolvents = set()
+    for literal in ci:
+        if -literal in cj:
+            # remove literal and its negation, combine rest
+            new_clause = (ci - {literal}) | (cj - {-literal})
+            resolvents.add(frozenset(new_clause))
+    return resolvents
+
+
+# main resolution algorithm
+def resolution(clauses):
+    # convert each clause (which is a set) to a frozenset for use in a set
+    clause_set = set(frozenset(clause) for clause in clauses)
+    print("Initial clauses:", clause_set)
 
     while True:
-        i = 0  # index for navigating through g
+        new_clauses = set()
+        clause_list = list(clause_set)
 
-        while len(r) == 0:
-            if d < len(g):
-                if len(g[d]) != 0:
-                    r = g[d]
-                    g.pop(d)
-                    # no need to increment d here since we popped that element
-                else:
-                    t = 0 
-                    break
-            else:
-                t = -1
-                break
+        for i in range(len(clause_list)):
+            for j in range(i + 1, len(clause_list)):
+                ci = set(clause_list[i])  # convert frozenset back to set for resolve
+                cj = set(clause_list[j])
+                resolvents = resolve(ci, cj)
 
-        if t == 0 or t == -1:
-            break
+                for res in resolvents:
+                    if len(res) == 0:  # found empty clause
+                        print(f"Contradiction found by resolving {ci} and {cj}")
+                        print("unsatisfiable")
+                        return
 
-        k = 0
-        while i < len(g):
-            l = 0
-            while l < len(g[i]):
-                j = 0
-                while j < len(r):
-                    if g[i][l] == -r[j]:  # if resolution is possible
-                        g[i].pop(l)
-                        r.pop(j)
-                        k = 1
-                        l -= 1  # adjust index due to pop
-                        break  # exit inner loop after resolution
-                    else:
-                        j += 1
-                l += 1
+                new_clauses.update(resolvents)
 
-            if k == 1:
-                for item in g[i]:
-                    if item not in r:  # avoid duplicates
-                        r.append(item)
-                g.pop(i)
-                if len(r) == 0:     # <=== ADD THIS CHECK!
-                    t = 0
-                    break
-                g.append(r.copy())
-                r = []
-                break  # restart resolution with new r
-            else:
-                i += 1
+        if new_clauses.issubset(clause_set):  # no new clauses
+            print("satisfiable")
+            return
 
-        # Add a safeguard to prevent infinite loops
-        if g == previous_g:  # If g hasn't changed, terminate to avoid infinite loop
-            t = -1
-            break
-        previous_g = g.copy()
+        print("New clauses generated this round:", new_clauses)
+        clause_set.update(new_clauses)
 
-        # Check for timeout
-        elapsed_time = time.time() - start_time
-        if elapsed_time >= timeout_seconds:
-            print(f"Result: Timeout reached after {timeout_seconds} seconds. Terminating to prevent hanging.")
-            return 1
 
-    if t == 0: # unsatisfiable
-        print("unsatisfiable")
-        return -1
-    elif t == -1: # unknown
-        print("satisfiable (unknown)")
-        return 0
+# runs a function with a timeout, prints execution time, and stops if too slow
+def run_with_timeout(func, args=(), kwargs=None, timeout=10):
+    if kwargs is None:
+        kwargs = {}
+    result = [None]
+    exc = [None]
+    start_time = time.time()  # start timer
 
+    def target():
+        try:
+            result[0] = func(*args, **kwargs)
+        except Exception as e:
+            exc[0] = e
+
+    thread = threading.Thread(target=target)
+    thread.start()
+    thread.join(timeout)
+    end_time = time.time()  # end timer
+    elapsed = end_time - start_time
+    if thread.is_alive():
+        print(f"Computation stopped: exceeded {timeout} seconds.")
+        print(f"Execution time: {elapsed:.6f} seconds")
+        return None
+    if exc[0]:
+        raise exc[0]
+    print(f"Execution time: {elapsed:.6f} seconds")
+    return result[0]
+
+
+# main program: get clauses and run resolution with timeout
 g = clauses()
-time_function(resolution, g)
+run_with_timeout(resolution, args=(g,), timeout=10)
