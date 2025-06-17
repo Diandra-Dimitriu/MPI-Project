@@ -1,12 +1,6 @@
 import time
-
-def time_function(func, *args, **kwargs):
-    start_time = time.time()
-    result = func(*args, **kwargs)
-    end_time = time.time()
-    print(f"Execution time: {end_time - start_time:.6f} seconds")
-    return result
-
+import threading
+import copy
 
 def clauses():
     print("input clauses")
@@ -15,90 +9,58 @@ def clauses():
         line = input()
         if line == "":
             break
-        g = []
+        g = set()
         for i in line.split(","):  # use digits separated with "," for each clause
-            g.append(int(i))
+            g.add(int(i))
         clauses.append(g)
     return clauses
 
-def resolution(g):
-    t = 1  # if 0 then unsatisfiable, if -1 unknown
-    d = 0  # current clause index
-    r = []  # to store the current clause we're resolving
-    previous_g = None  # To track changes in g
+def resolve(ci, cj):
+    resolvents = set()
+    for literal in ci:
+        if -literal in cj:
+            # Remove literal and its negation, combine rest
+            new_clause = (ci - {literal}) | (cj - {-literal})
+            resolvents.add(frozenset(new_clause))
+    return resolvents
+
+
+
+def resolution(clauses):
+    """Apply the resolution algorithm to a set of clauses."""
+    clause_set = set(frozenset(clause) for clause in clauses)
 
     while True:
-        i = 0  # index for navigating through g
+        new_clauses = set()
+        clause_list = list(clause_set)
 
-        while len(r) == 0:
-            if d < len(g):
-                if len(g[d]) != 0:
-                    r = g[d]
-                    g.pop(d)
-                    # no need to increment d here since we popped that element
-                else:
-                    t = 0 
-                    break
-            else:
-                t = -1
-                break
+        for i in range(len(clause_list)):
+            for j in range(i + 1, len(clause_list)):
+                ci = clause_list[i]
+                cj = clause_list[j]
+                resolvents = resolve(ci, cj)
 
-        if t == 0 or t == -1:
-            break
+                if frozenset() in resolvents:
+                    return -1  # unsatisfiable
 
-        k = 0
-        while i < len(g):
-            l = 0
-            while l < len(g[i]):
-                j = 0
-                while j < len(r):
-                    if g[i][l] == -r[j]:  # if resolution is possible
-                        g[i].pop(l)
-                        r.pop(j)
-                        k = 1
-                        l -= 1  # adjust index due to pop
-                        break  # exit inner loop after resolution
-                    else:
-                        j += 1
-                l += 1
+                new_clauses.update(resolvents)
 
-            if k == 1:
-                for item in g[i]:
-                    if item not in r:  # avoid duplicates
-                        r.append(item)
-                g.pop(i)
-                if len(r) == 0:     # <=== ADD THIS CHECK!
-                    t = 0
-                    break
-                g.append(r.copy())
-                r = []
-                break  # restart resolution with new r
-            else:
-                i += 1
+        if new_clauses.issubset(clause_set):
+            return 1  # satisfiable
 
-        # Add a safeguard to prevent infinite loops
-        if g == previous_g:  # If g hasn't changed, terminate to avoid infinite loop
-            t = -1
-            break
-        previous_g = g.copy()
-    if t == 0: # unsatisfiable
-        return -1
-    elif t == -1: # unknown
-        return 0
+        clause_set.update(new_clauses)
 
 def Davis_Putnam(g):
     t = 0
     r = []
+    original_clauses = copy.deepcopy(g)  # Save original
+
     while True:
-        if len(g) == 0:  # condition for satisfiability
+        if len(g) == 0:
             t = 1
             break
         else:
-            j = 0
-            for i in range(len(g)):
-                if len(g[i]) == 0:
-                    j = j + 1
-            if j > 0:  # condition for unsatisfiability
+            if any(len(clause) == 0 for clause in g):
                 t = -1
                 break
 
@@ -106,7 +68,7 @@ def Davis_Putnam(g):
         i = 0
         while i < len(g):
             if len(g[i]) == 1:
-                f = g[i][0]
+                f = next(iter(g[i]))
                 g.pop(i)
                 j = 0
                 while j < len(g):
@@ -117,24 +79,17 @@ def Davis_Putnam(g):
                         j += 1
                     else:
                         j += 1
-                i = 0  # restart after modification
+                i = 0
             else:
                 i += 1
 
         # Pure literal rule
         d = 0
         while d < len(g):
-            r = g[d][:]
+            r = set(g[d])
             for lit in r:
-                is_pure = True
-                for i in range(len(g)):
-                    if d == i:
-                        continue
-                    if -lit in g[i]:
-                        is_pure = False
-                        break
+                is_pure = all(-lit not in g[i] for i in range(len(g)) if i != d)
                 if is_pure:
-                    # Remove all clauses with this pure literal
                     i = 0
                     while i < len(g):
                         if lit in g[i]:
@@ -144,28 +99,45 @@ def Davis_Putnam(g):
                             i += 1
                         else:
                             i += 1
-                    d = 0  # restart loop after changes
+                    d = 0
                     break
             else:
                 d += 1
 
-        # If no progress, call resolution
-        if t == 0:
-            t = resolution(g)
-            if t != 0:
-                break
-
-        # Add a safeguard to prevent infinite loops
-        if len(g) == 0:
-            t = 1
-            break
+        print("No further simplification possible. Falling back to resolution...")
+        t = resolution(original_clauses)  # Use original copy!
+        break
 
     if t == -1:
         print("unsatisfiable")
-        return
     elif t == 1:
         print("satisfiable")
-        return
+
+
+def run_with_timeout(func, args=(), kwargs=None, timeout=10):
+    if kwargs is None:
+        kwargs = {}
+    result = [None]
+    exc = [None]
+    start_time = time.time()
+    def target():
+        try:
+            result[0] = func(*args, **kwargs)
+        except Exception as e:
+            exc[0] = e
+    thread = threading.Thread(target=target)
+    thread.start()
+    thread.join(timeout)
+    end_time = time.time()
+    elapsed = end_time - start_time
+    if thread.is_alive():
+        print(f"Computation stopped: exceeded {timeout} seconds.")
+        print(f"Execution time: {elapsed:.6f} seconds")
+        return None
+    if exc[0]:
+        raise exc[0]
+    print(f"Execution time: {elapsed:.6f} seconds")
+    return result[0]
 
 g = clauses()
-time_function(Davis_Putnam, g)
+run_with_timeout(Davis_Putnam, args=(g,), timeout=10)
